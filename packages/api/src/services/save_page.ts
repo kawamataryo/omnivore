@@ -13,7 +13,6 @@ import {
   SavePageInput,
   SaveResult,
 } from '../generated/graphql'
-import { redisClient } from '../redis'
 import { authTrx } from '../repository'
 import { enqueueThumbnailTask } from '../utils/createTask'
 import {
@@ -29,7 +28,7 @@ import { parsePreparedContent } from '../utils/parser'
 import { contentReaderForLibraryItem } from '../utils/uploads'
 import { createPageSaveRequest } from './create_page_save_request'
 import { createHighlight } from './highlights'
-import { createAndSaveLabelsInLibraryItem } from './labels'
+import { createAndAddLabelsToLibraryItem } from './labels'
 import { createLibraryItem, updateLibraryItem } from './library_item'
 
 // where we can use APIs to fetch their underlying content.
@@ -161,7 +160,8 @@ export const savePage = async (
       clientRequestId = newItem.id
     }
 
-    await createAndSaveLabelsInLibraryItem(
+    // merge labels
+    await createAndAddLabelsToLibraryItem(
       clientRequestId,
       user.id,
       input.labels,
@@ -187,6 +187,7 @@ export const savePage = async (
       libraryItem: { id: clientRequestId },
     }
 
+    // merge highlights
     if (!(await createHighlight(highlight, clientRequestId, user.id))) {
       return {
         errorCodes: [SaveErrorCode.EmbeddedHighlightFailed],
