@@ -21,11 +21,16 @@ import {
 } from '../../src/generated/graphql'
 import { getRepository } from '../../src/repository'
 import { createGroup, deleteGroup } from '../../src/services/groups'
-import { createHighlight } from '../../src/services/highlights'
 import {
+  createHighlight,
+  findHighlightsByLibraryItemId,
+} from '../../src/services/highlights'
+import {
+  createAndSaveLabelsInLibraryItem,
   createLabel,
   deleteLabels,
-  saveLabelsInLibraryItem
+  findLabelsByLibraryItemId,
+  saveLabelsInLibraryItem,
 } from '../../src/services/labels'
 import {
   createLibraryItem,
@@ -36,13 +41,19 @@ import {
   deleteLibraryItemsByUserId,
   findLibraryItemById,
   findLibraryItemByUrl,
-  updateLibraryItem
+  softDeleteLibraryItem,
+  updateLibraryItem,
 } from '../../src/services/library_item'
 import { deleteUser } from '../../src/services/user'
 import * as createTask from '../../src/utils/createTask'
 import * as uploads from '../../src/utils/uploads'
 import { createTestLibraryItem, createTestUser } from '../db'
-import { generateFakeUuid, graphqlRequest, request } from '../util'
+import {
+  generateFakeShortId,
+  generateFakeUuid,
+  graphqlRequest,
+  request,
+} from '../util'
 
 chai.use(chaiString)
 
@@ -570,23 +581,37 @@ describe('Article API', () => {
         ).expect(200)
 
         // Save a link, then archive it
-        let allLinks = await graphqlRequest(searchQuery('in:inbox'), authToken).expect(
-          200
-        )
+        let allLinks = await graphqlRequest(
+          searchQuery('in:inbox'),
+          authToken
+        ).expect(200)
         const justSavedId = allLinks.body.data.search.edges[0].node.id
         await archiveLink(authToken, justSavedId)
 
         // test the negative case, ensuring the archive link wasn't returned
-        allLinks = await graphqlRequest(searchQuery('in:inbox'), authToken).expect(200)
+        allLinks = await graphqlRequest(
+          searchQuery('in:inbox'),
+          authToken
+        ).expect(200)
         expect(allLinks.body.data.search.edges[0]?.node?.url).to.not.eq(url)
 
         // Now save the link again, and ensure it is returned
         await graphqlRequest(
-          savePageQuery(url, title, originalContent, null, null, generateFakeUuid()),
+          savePageQuery(
+            url,
+            title,
+            originalContent,
+            null,
+            null,
+            generateFakeUuid()
+          ),
           authToken
         ).expect(200)
 
-        allLinks = await graphqlRequest(searchQuery('in:inbox'), authToken).expect(200)
+        allLinks = await graphqlRequest(
+          searchQuery('in:inbox'),
+          authToken
+        ).expect(200)
         expect(allLinks.body.data.search.edges[0].node.id).to.eq(justSavedId)
         expect(allLinks.body.data.search.edges[0].node.url).to.eq(url)
       })
@@ -673,27 +698,41 @@ describe('Article API', () => {
     let itemId: string
 
     before(async () => {
-      const itemToSave: DeepPartial<LibraryItem> = {
-        user,
-        title: 'test title',
-        readableContent: '<p>test</p>',
-        originalUrl: 'https://blog.omnivore.app/setBookmarkArticle',
-        slug: 'test-with-omnivore',
-      }
-      const item = await createLibraryItem(itemToSave, user.id)
+      const item = await createTestLibraryItem(user.id)
       itemId = item.id
+
+      await createAndSaveLabelsInLibraryItem(itemId, user.id, [
+        {
+          name: 'test label 2',
+        },
+      ])
+      await createHighlight(
+        {
+          shortId: generateFakeShortId(),
+          user: { id: user.id },
+          quote: 'test quote 2',
+        },
+        itemId,
+        user.id
+      )
     })
 
     after(async () => {
       await deleteLibraryItemById(itemId, user.id)
     })
 
-    it('marks an article as deleted', async () => {
+    it('marks an item as deleted and deletes all the labels and highlights attached to the item', async () => {
       await graphqlRequest(setBookmarkQuery(itemId, false), authToken).expect(
         200
       )
       const item = await findLibraryItemById(itemId, user.id)
       expect(item?.state).to.eql(LibraryItemState.Deleted)
+
+      const labels = await findLabelsByLibraryItemId(itemId, user.id)
+      expect(labels).to.be.empty
+
+      const highlights = await findHighlightsByLibraryItemId(itemId, user.id)
+      expect(highlights).to.be.empty
     })
   })
 
@@ -778,15 +817,20 @@ describe('Article API', () => {
 
     context('when force is true', () => {
       before(async () => {
-        itemId = (await createLibraryItem({
-          user: { id: user.id },
-          originalUrl: 'https://blog.omnivore.app/setBookmarkArticle',
-          slug: 'test-with-omnivore',
-          readableContent: '<p>test</p>',
-          title: 'test title',
-          readingProgressBottomPercent: 100,
-          readingProgressTopPercent: 80,
-        }, user.id)).id
+        itemId = (
+          await createLibraryItem(
+            {
+              user: { id: user.id },
+              originalUrl: 'https://blog.omnivore.app/setBookmarkArticle',
+              slug: 'test-with-omnivore',
+              readableContent: '<p>test</p>',
+              title: 'test title',
+              readingProgressBottomPercent: 100,
+              readingProgressTopPercent: 80,
+            },
+            user.id
+          )
+        ).id
       })
 
       after(async () => {
@@ -2013,11 +2057,8 @@ describe('Article API', () => {
 
       // Delete some items
       for (let i = 0; i < 3; i++) {
-        await updateLibraryItem(
-          items[i].id,
-          { state: LibraryItemState.Deleted, deletedAt: new Date() },
-          user.id
-        )
+        await softDeleteLibraryItem(items[i].id, user.id)
+
         deletedItems.push(items[i])
       }
     })
@@ -2052,20 +2093,23 @@ describe('Article API', () => {
       )
     })
 
-    context('when since is -1000000000-01-01T00:00:00Z from android app', () => {
-      before(() => {
-        since = '-1000000000-01-01T00:00:00Z'
-      })
+    context(
+      'when since is -1000000000-01-01T00:00:00Z from android app',
+      () => {
+        before(() => {
+          since = '-1000000000-01-01T00:00:00Z'
+        })
 
-      it('returns all', async () => {
-        const res = await graphqlRequest(
-          updatesSinceQuery(since),
-          authToken
-        ).expect(200)
+        it('returns all', async () => {
+          const res = await graphqlRequest(
+            updatesSinceQuery(since),
+            authToken
+          ).expect(200)
 
-        expect(res.body.data.updatesSince.edges.length).to.eql(5)
-      })
-    })
+          expect(res.body.data.updatesSince.edges.length).to.eql(5)
+        })
+      }
+    )
 
     context('returns highlights', () => {
       let highlight: Highlight
@@ -2092,9 +2136,9 @@ describe('Article API', () => {
         expect(res.body.data.updatesSince.edges[0].node.highlights[0].id).to.eq(
           highlight.id
         )
-        expect(res.body.data.updatesSince.edges[0].node.highlights[0].type).to.eq(
-          HighlightType.Highlight
-        )
+        expect(
+          res.body.data.updatesSince.edges[0].node.highlights[0].type
+        ).to.eq(HighlightType.Highlight)
       })
     })
   })
