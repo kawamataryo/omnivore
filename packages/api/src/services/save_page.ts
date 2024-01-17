@@ -1,6 +1,5 @@
 import { Readability } from '@omnivore/readability'
 import { DeepPartial } from 'typeorm'
-import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity'
 import { Highlight } from '../entity/highlight'
 import { LibraryItem, LibraryItemState } from '../entity/library_item'
 import { User } from '../entity/user'
@@ -29,7 +28,7 @@ import { contentReaderForLibraryItem } from '../utils/uploads'
 import { createPageSaveRequest } from './create_page_save_request'
 import { createHighlight } from './highlights'
 import { createAndAddLabelsToLibraryItem } from './labels'
-import { createLibraryItem, updateLibraryItem } from './library_item'
+import { createLibraryItem, recreateLibraryItem } from './library_item'
 
 // where we can use APIs to fetch their underlying content.
 const FORCE_PUPPETEER_URLS = [
@@ -139,15 +138,11 @@ export const savePage = async (
         }
       }
 
-      // update the item except for id and slug
-      await updateLibraryItem(
+      await recreateLibraryItem(
         clientRequestId,
-        {
-          ...itemToSave,
-          id: undefined,
-          slug: undefined,
-        } as QueryDeepPartialEntity<LibraryItem>,
-        user.id
+        user.id,
+        existingLibraryItem.state,
+        itemToSave
       )
     } else {
       // do not publish a pubsub event if the item is imported

@@ -20,6 +20,7 @@ import {
   countByCreatedAt,
   createLibraryItem,
   findLibraryItemByUrl,
+  recreateLibraryItem,
   updateLibraryItem,
 } from './library_item'
 
@@ -139,12 +140,13 @@ export const createPageSaveRequest = async ({
   }
   // reset state to processing
   if (libraryItem.state !== LibraryItemState.Processing) {
-    libraryItem = await updateLibraryItem(
+    libraryItem = await recreateLibraryItem(
       libraryItem.id,
+      userId,
+      libraryItem.state,
       {
         state: LibraryItemState.Processing,
       },
-      userId,
       pubsub
     )
   }
