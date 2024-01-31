@@ -657,6 +657,7 @@ export const enqueueTriggerRuleJob = async (data: TriggerRuleJobData) => {
   return queue.add(TRIGGER_RULE_JOB_NAME, data, {
     removeOnComplete: true,
     removeOnFail: true,
+    priority: 1,
   })
 }
 

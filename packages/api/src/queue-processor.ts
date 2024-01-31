@@ -15,6 +15,10 @@ import { updatePDFContentJob } from './jobs/update_pdf_content'
 import { redisDataSource } from './redis_data_source'
 import { CustomTypeOrmLogger } from './utils/logger'
 import { triggerRule, TRIGGER_RULE_JOB_NAME } from './jobs/trigger_rule'
+import {
+  SYNC_READ_POSITIONS_JOB_NAME,
+  syncReadPositionsJob,
+} from './jobs/sync_read_positions'
 
 export const QUEUE_NAME = 'omnivore-backend-queue'
 
@@ -121,6 +125,9 @@ const main = async () => {
         case 'update-pdf-content': {
           return updatePDFContentJob(job.data)
         }
+        case SYNC_READ_POSITIONS_JOB_NAME: {
+          return syncReadPositionsJob(job.data, job.attemptsMade)
+        }
         case THUMBNAIL_JOB:
           return findThumbnail(job.data)
         case TRIGGER_RULE_JOB_NAME:
@@ -131,6 +138,21 @@ const main = async () => {
       connection: workerRedisClient,
     }
   )
+
+  const queue = await getBackendQueue()
+  if (queue) {
+    await queue.add(
+      SYNC_READ_POSITIONS_JOB_NAME,
+      {},
+      {
+        priority: 1,
+        repeat: {
+          every: 10000,
+          limit: 100,
+        },
+      }
+    )
+  }
 
   const queueEvents = new QueueEvents(QUEUE_NAME, {
     connection: workerRedisClient,
